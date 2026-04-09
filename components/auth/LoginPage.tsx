@@ -1,36 +1,21 @@
-// components/auth/LoginPage.tsx — Gerçek Google OAuth + SMS OTP
-// ─────────────────────────────────────────────────────────────
-// Gerekli paket:  npm install @react-oauth/google
-// Env:            NEXT_PUBLIC_GOOGLE_CLIENT_ID
-
+// components/auth/LoginPage.tsx
+// Google OAuth YOK — sadece e-posta ile giriş
 'use client';
 
 import { useState, useEffect } from 'react';
-import { GoogleOAuthProvider, GoogleLogin, CredentialResponse } from '@react-oauth/google';
 
 interface User { id: string; name: string; email: string; phone: string | null; role: string; }
 interface Props { onLogin: (u: User) => void; }
 
-const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? '';
-
 export default function LoginPage({ onLogin }: Props) {
-  return (
-    <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
-      <LoginInner onLogin={onLogin} />
-    </GoogleOAuthProvider>
-  );
-}
-
-// ── İç bileşen ────────────────────────────────────────────
-function LoginInner({ onLogin }: Props) {
-  const [step,      setStep]      = useState<'google' | 'otp'>('google');
-  const [userId,    setUserId]    = useState('');
-  const [phoneMask, setPhoneMask] = useState('');
+  const [email,     setEmail]     = useState('');
   const [otp,       setOtp]       = useState('');
+  const [sentOtp,   setSentOtp]   = useState('');
+  const [step,      setStep]      = useState<'email' | 'otp'>('email');
+  const [foundUser, setFoundUser] = useState<User | null>(null);
   const [err,       setErr]       = useState('');
   const [loading,   setLoading]   = useState(false);
   const [countdown, setCountdown] = useState(0);
-  const [credential, setCredential] = useState(''); // Google credential (yeniden gönderim için)
 
   useEffect(() => {
     if (countdown <= 0) return;
@@ -38,83 +23,47 @@ function LoginInner({ onLogin }: Props) {
     return () => clearTimeout(t);
   }, [countdown]);
 
-  // ── Adım 1: Google token → backend ────────────────────
-  const handleGoogleSuccess = async (credentialResponse: CredentialResponse) => {
-    if (!credentialResponse.credential) return;
+  const handleEmailSubmit = async () => {
+    if (!email.trim()) { setErr('E-posta adresi girin.'); return; }
     setLoading(true);
     setErr('');
-    setCredential(credentialResponse.credential);
-
     try {
-      const res  = await fetch('/api/auth/google', {
+      const res  = await fetch('/api/auth/demo-lookup', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ credential: credentialResponse.credential }),
+        body:    JSON.stringify({ email: email.trim() }),
       });
       const data = await res.json();
-
-      if (!res.ok) {
-        setErr(data.error ?? 'Giriş başarısız.');
+      if (!res.ok || !data.user) {
+        setErr(data.error ?? 'Bu e-posta sisteme kayıtlı değil.');
         return;
       }
-
-      setUserId(data.userId);
-      setPhoneMask(data.phoneMask);
+      setFoundUser(data.user);
+      const code = String(Math.floor(100000 + Math.random() * 900000));
+      setSentOtp(code);
       setStep('otp');
       setCountdown(60);
     } catch {
-      setErr('Sunucuya bağlanılamadı. Lütfen tekrar deneyin.');
+      setErr('Sunucuya bağlanılamadı.');
     } finally {
       setLoading(false);
     }
   };
 
-  // ── Adım 2: OTP doğrulama ─────────────────────────────
-  const handleVerify = async () => {
-    if (otp.length < 6) return;
-    setLoading(true);
+  const handleOtpSubmit = () => {
+    if (otp === sentOtp && foundUser) {
+      onLogin(foundUser);
+    } else {
+      setErr('Hatalı kod. Tekrar deneyin.');
+    }
+  };
+
+  const resend = () => {
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    setSentOtp(code);
+    setCountdown(60);
     setErr('');
-
-    try {
-      const res  = await fetch('/api/auth/verify-otp', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ userId, otp }),
-      });
-      const data = await res.json();
-
-      if (!res.ok) {
-        setErr(data.error ?? 'Hatalı kod.');
-        return;
-      }
-
-      onLogin(data.user);
-    } catch {
-      setErr('Doğrulama başarısız. Tekrar deneyin.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // ── Kodu yeniden gönder ───────────────────────────────
-  const resend = async () => {
-    if (!credential) return;
     setOtp('');
-    setErr('');
-    setLoading(true);
-
-    try {
-      const res  = await fetch('/api/auth/google', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ credential }),
-      });
-      const data = await res.json();
-      if (res.ok) setCountdown(60);
-      else setErr(data.error ?? 'SMS gönderilemedi.');
-    } finally {
-      setLoading(false);
-    }
   };
 
   return (
@@ -130,7 +79,6 @@ function LoginInner({ onLogin }: Props) {
       ))}
 
       <div className="login-card">
-        {/* Logo */}
         <div style={{ textAlign: 'center', marginBottom: 28 }}>
           <div style={{
             width: 56, height: 56,
@@ -143,70 +91,65 @@ function LoginInner({ onLogin }: Props) {
           <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 5 }}>Sigorta Yönetim Paneli</p>
         </div>
 
-        {/* ── ADIM 1: Google ── */}
-        {step === 'google' && (
+        {step === 'email' && (
           <>
             <div style={{
               background: 'var(--bg3)', border: '1px solid var(--border)',
-              borderRadius: 12, padding: '14px 16px', marginBottom: 24,
+              borderRadius: 12, padding: '14px 16px', marginBottom: 20,
               fontSize: 12, color: 'var(--muted)', display: 'flex', gap: 10,
             }}>
               <span style={{ fontSize: 16, flexShrink: 0 }}>🔐</span>
-              <span>Sisteme giriş <strong style={{ color: 'var(--muted2)' }}>Google hesabınızla</strong> yapılır.
-                Hesabınız yönetici tarafından kayıtlı olmalıdır.</span>
+              <span>Sisteme kayıtlı <strong style={{ color: 'var(--muted2)' }}>e-posta adresinizle</strong> giriş yapın.</span>
             </div>
 
-            {err && <ErrorBox msg={err} />}
-
-            {/* Google Login Butonu */}
-            <div style={{ display: 'flex', justifyContent: 'center' }}>
-              {loading
-                ? (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 20px', background: '#fff', borderRadius: 10, border: '1px solid #dadce0', fontSize: 14, color: '#3c4043' }}>
-                    <span className="loading-spinner" style={{ borderColor: '#dadce0', borderTopColor: '#4285F4', width: 16, height: 16 }} />
-                    Doğrulanıyor...
-                  </div>
-                )
-                : (
-                  <GoogleLogin
-                    onSuccess={handleGoogleSuccess}
-                    onError={() => setErr('Google girişi başarısız. Tekrar deneyin.')}
-                    text="signin_with"
-                    theme="outline"
-                    shape="rectangular"
-                    size="large"
-                  />
-                )
-              }
+            <div className="form-group">
+              <label className="form-label">E-Posta Adresi</label>
+              <input
+                className="form-input"
+                type="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleEmailSubmit()}
+                placeholder="ornek@email.com"
+                autoFocus
+              />
             </div>
 
-            <div style={{ marginTop: 20, borderTop: '1px solid var(--border)', paddingTop: 16, fontSize: 11.5, color: 'var(--muted)', textAlign: 'center', lineHeight: 1.8 }}>
-              Erişim sorunu? Yöneticinizle iletişime geçin.
-            </div>
+            {err && <div style={{ color: 'var(--red)', fontSize: 12, marginBottom: 14, padding: '10px 14px', background: 'rgba(239,68,68,0.08)', borderRadius: 8, textAlign: 'center' }}>{err}</div>}
+
+            <button
+              className="btn btn-primary"
+              style={{ width: '100%', padding: '13px', fontSize: 15, justifyContent: 'center' }}
+              onClick={handleEmailSubmit}
+              disabled={loading}
+            >
+              {loading ? 'Kontrol ediliyor...' : 'Devam Et →'}
+            </button>
           </>
         )}
 
-        {/* ── ADIM 2: OTP ── */}
-        {step === 'otp' && (
+        {step === 'otp' && foundUser && (
           <>
+            <div style={{ textAlign: 'center', marginBottom: 20 }}>
+              <div style={{ fontWeight: 600, fontSize: 15 }}>{foundUser.name}</div>
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>{foundUser.email}</div>
+            </div>
+
             <div style={{
-              background: 'rgba(79,142,247,0.08)', border: '1px solid rgba(79,142,247,0.2)',
-              borderRadius: 12, padding: '14px 16px', marginBottom: 20,
-              fontSize: 13, color: 'var(--muted2)', textAlign: 'center', lineHeight: 1.8,
+              background: 'var(--bg3)', border: '1px dashed var(--border2)',
+              borderRadius: 10, padding: '10px 16px', marginBottom: 16,
+              fontSize: 12, color: 'var(--muted)', textAlign: 'center',
             }}>
-              📱 <strong style={{ color: 'var(--text)' }}>****{phoneMask}</strong> numaralı telefona<br />
-              6 haneli doğrulama kodu gönderildi.
+              Doğrulama Kodu: <strong style={{ color: 'var(--green)', fontSize: 20, letterSpacing: 5, fontFamily: 'monospace' }}>{sentOtp}</strong>
             </div>
 
             <div className="form-group" style={{ marginBottom: 20 }}>
-              <label className="form-label" style={{ textAlign: 'center', display: 'block' }}>
-                Doğrulama Kodu
-              </label>
+              <label className="form-label" style={{ textAlign: 'center', display: 'block' }}>Kodu Girin</label>
               <input
                 className="form-input"
                 value={otp}
                 onChange={e => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                onKeyDown={e => e.key === 'Enter' && otp.length === 6 && handleVerify()}
+                onKeyDown={e => e.key === 'Enter' && otp.length === 6 && handleOtpSubmit()}
                 placeholder="_ _ _ _ _ _"
                 autoFocus
                 style={{ textAlign: 'center', fontSize: 28, letterSpacing: 10, fontFamily: 'monospace', padding: '14px' }}
@@ -214,51 +157,27 @@ function LoginInner({ onLogin }: Props) {
               />
             </div>
 
-            {err && <ErrorBox msg={err} />}
+            {err && <div style={{ color: 'var(--red)', fontSize: 12, marginBottom: 14, padding: '10px 14px', background: 'rgba(239,68,68,0.08)', borderRadius: 8, textAlign: 'center' }}>{err}</div>}
 
             <button
               className="btn btn-primary"
               style={{ width: '100%', padding: '13px', fontSize: 15, justifyContent: 'center' }}
-              onClick={handleVerify}
-              disabled={otp.length < 6 || loading}
+              onClick={handleOtpSubmit}
+              disabled={otp.length < 6}
             >
-              {loading
-                ? <><span className="loading-spinner" style={{ width: 16, height: 16 }} /> Doğrulanıyor...</>
-                : '✓ Doğrula ve Giriş Yap'
-              }
+              ✓ Giriş Yap
             </button>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14, fontSize: 12 }}>
-              <button
-                style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', fontSize: 12 }}
-                onClick={() => { setStep('google'); setErr(''); setOtp(''); }}
-              >
-                ← Geri
-              </button>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 14, fontSize: 12 }}>
+              <button style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer' }} onClick={() => { setStep('email'); setErr(''); setOtp(''); }}>← Geri</button>
               {countdown > 0
                 ? <span style={{ color: 'var(--muted)' }}>Yeniden gönder ({countdown}s)</span>
-                : (
-                  <button
-                    style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 12 }}
-                    onClick={resend}
-                    disabled={loading}
-                  >
-                    Kodu Yeniden Gönder
-                  </button>
-                )
+                : <button style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer' }} onClick={resend}>Yeniden Gönder</button>
               }
             </div>
           </>
         )}
       </div>
-    </div>
-  );
-}
-
-function ErrorBox({ msg }: { msg: string }) {
-  return (
-    <div style={{ color: 'var(--red)', fontSize: 12, marginBottom: 14, padding: '10px 14px', background: 'rgba(239,68,68,0.08)', borderRadius: 8, textAlign: 'center', lineHeight: 1.6 }}>
-      {msg}
     </div>
   );
 }
